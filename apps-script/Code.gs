@@ -31,7 +31,7 @@ const SHEETS = {
 };
 
 const CODES_SHEET = 'الرموز';
-const CODES_HEADERS = ['الرمز', 'المسجد', 'المدرب', 'مفعّل'];
+const CODES_HEADERS = ['الرمز', 'المسجد', 'المدرب', 'مفعّل', 'المصدر'];
 // القيم الابتدائية فقط (أسماء المساجد والمدربين). عدّلها لاحقاً من ورقة "الرموز" مباشرة.
 const DEFAULT_ASSIGNMENTS = [
   ['جامع القدم الكبير', 'محمود خاروف'],
@@ -47,6 +47,8 @@ const LEGACY_TRAINERS = { 'مدرب جامع القدم الكبير': 'محمو
 const CODE_LENGTH = 4;           // عدد أرقام الرمز. للأمان الأعلى اجعله 6.
 const MAX_FAILS_SHORT = 15;      // محاولات خاطئة مسموحة خلال 10 دقائق
 const MAX_FAILS_LONG = 60;       // محاولات خاطئة مسموحة خلال 6 ساعات
+const OPEN_REGISTRATION = true;  // السماح للمدرب الجديد بتسجيل نفسه (false لإيقافه)
+const MAX_REGISTRATIONS = 30;    // أقصى عدد تسجيلات جديدة خلال 6 ساعات
 
 /* ===================== الرموز ===================== */
 function latinDigits_(s) {
@@ -76,7 +78,7 @@ function codesSheet_() {
   let sh = ss.getSheetByName(CODES_SHEET);
   if (!sh) {
     sh = ss.insertSheet(CODES_SHEET);
-    sh.getRange(1, 1, 1, 4).setValues([CODES_HEADERS]).setFontWeight('bold').setBackground('#fde0c8');
+    sh.getRange(1, 1, 1, 5).setValues([CODES_HEADERS]).setFontWeight('bold').setBackground('#fde0c8');
     sh.getRange(1, 1, 500, 1).setNumberFormat('@');   // الرمز نص دائماً (كي لا يُحذف الصفر من أوله)
     sh.setFrozenRows(1);
     sh.setRightToLeft(true);
@@ -137,8 +139,37 @@ function auth_(code) {
   return { who: who };
 }
 
+
+/** تسجيل مدرب جديد ذاتياً: يُنشئ له رمزاً من 4 أرقام في ورقة الرموز ويُدخله مباشرة. */
+function register_(d) {
+  if (!OPEN_REGISTRATION) return { ok: false, error: 'registration_closed' };
+  const cache = CacheService.getScriptCache();
+  const n = Number(cache.get('reg_n') || 0);
+  if (n >= MAX_REGISTRATIONS) return { ok: false, error: 'throttled' };
+  const name = String(d.name == null ? '' : d.name).replace(/\s+/g, ' ').replace(/^[=+\-@\s]+/, '').trim().slice(0, 60);
+  if (name.length < 2) return { ok: false, error: 'bad_name' };
+  const sh = codesSheet_();
+  const last = sh.getLastRow();
+  const rows = last < 2 ? [] : sh.getRange(2, 1, last - 1, 4).getValues();
+  const want = mosqueKey_(d.mosque);
+  const mrow = rows.find(r => want && mosqueKey_(r[1]) === want);
+  if (!mrow) return { ok: false, error: 'bad_mosque' };
+  const mosque = String(mrow[1]).trim();
+  const lname = name.toLowerCase();
+  if (rows.some(r => String(r[2]).trim().toLowerCase() === lname)) return { ok: false, error: 'name_exists' };
+  const taken = {};
+  rows.forEach(r => { const c = cellCode_(r[0]); if (c) taken[c] = 1; });
+  let code, tries = 0;
+  do { code = newCode_(); tries++; } while (code in taken && tries < 500);
+  if (code in taken) return { ok: false, error: 'server_error' };
+  if (!String(sh.getRange(1, 5).getValue()).trim()) sh.getRange(1, 5).setValue(CODES_HEADERS[4]).setFontWeight('bold').setBackground('#fde0c8');
+  sh.appendRow([code, mosque, name, 'نعم', 'تسجيل ذاتي ' + Utilities.formatDate(new Date(), 'Asia/Damascus', 'yyyy-MM-dd HH:mm')]);
+  cache.put('reg_n', String(n + 1), 21600);
+  return { ok: true, code: code, trainer: name, mosque: mosque, info: null, students: studentsOf_(mosque) };
+}
+
 /** شغّلها يدوياً لفك الإيقاف المؤقت للدخول بعد محاولات خاطئة كثيرة. */
-function clearLock() { CacheService.getScriptCache().removeAll(['fails_s', 'fails_l']); }
+function clearLock() { CacheService.getScriptCache().removeAll(['fails_s', 'fails_l', 'reg_n']); }
 
 /* ===================== مساعدات الأوراق ===================== */
 function getSheet_(kind) {
@@ -215,7 +246,9 @@ function doPost(e) {
   try {
     const d = JSON.parse(e.postData.contents);
 
-    // كل العمليات تتطلب رمزاً صحيحاً
+    if (d.kind === 'register') return json_(register_(d));   // الوحيدة التي لا تحتاج رمزاً: تُنشئ رمزاً جديداً
+
+    // باقي العمليات تتطلب رمزاً صحيحاً
     if (['login', 'trainer', 'student'].indexOf(d.kind) < 0) return json_({ ok: false, error: 'bad_request' });
     const a = auth_(d.code);
     if (a.error) return json_({ ok: false, error: a.error });

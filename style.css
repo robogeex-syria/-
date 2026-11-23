@@ -112,3 +112,5 @@ h2{font-size:1.2rem;margin:0 0 2px}
 .info-row{border:2px solid var(--brand-line);background:#fff}
 .ver{text-align:center;color:var(--muted);font-size:.75rem;margin:28px 0 0}
 .link{background:none;border:0;color:var(--brand);font-weight:700;padding:8px;text-decoration:underline;white-space:nowrap}
+.newtr{display:block;margin:12px auto 0}
+.code-show{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:3rem;font-weight:800;letter-spacing:.4em;text-indent:.4em;color:var(--brand);background:var(--brand-soft);border-radius:16px;padding:14px 6px;margin:12px 0;text-align:center}

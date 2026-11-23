@@ -1,8 +1,8 @@
 'use strict';
 /* ===================== الإعدادات (عدّل هنا فقط) ===================== */
 const CONFIG = {
-  VERSION: '7',                     // يظهر أسفل الصفحة؛ زِده عند كل تحديث (وغيّر ?v= في index.html)
-  PROJECT_NAME: 'تقييم المدربين والطلاب في المساجد',
+  VERSION: '8',                     // يظهر أسفل الصفحة؛ زِده عند كل تحديث (وغيّر ?v= في index.html)
+  PROJECT_NAME: 'تقييم الطلاب في المساجد',
   ACADEMY_NAME: 'ROBOGEEX academy',   // يظهر بدل الشعار إذا تعذّر تحميله
   APPS_SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbwamR0eGzgQ2Ya1aZZagt7TfwbxpP_9yWtBPo_fZNnIMSH7mS-qfRm8rsFKs1EgSNrC/exec',
   CSV_URL: 'data/students.csv',     // ملف الأسماء
@@ -79,7 +79,7 @@ const findMosque = (name) => MOS[name] || MOSQUES.find((m) => mosqueKey(m.name) 
 const saved = LS.get('mev2', {});
 let store = { students: saved.students || {}, trainers: saved.trainers || {}, queue: saved.queue || [], session: saved.session || null };
 const persist = () => LS.set('mev2', store);
-const ui = { view: 'home', section: 'students', onlyPending: false, search: '', form: null, done: null };
+const ui = { reg: null, newCode: null, view: 'home', section: 'students', onlyPending: false, search: '', form: null, done: null };
 
 /* ===================== تحميل البيانات ===================== */
 async function loadData() {
@@ -155,7 +155,18 @@ const LOGIN_ERRORS = {
   throttled: 'تم إيقاف الدخول مؤقتاً بسبب محاولات خاطئة كثيرة. حاول لاحقاً أو تواصل مع الأكاديمية.',
   network: 'تعذّر الاتصال بالإنترنت. تأكد من الاتصال وأعد المحاولة.',
   no_server: 'خدمة الدخول غير مفعّلة بعد.',
+  name_exists: 'هذا الاسم مسجّل مسبقاً في الأكاديمية. إن كنت مسجّلاً فادخل برمزك، أو اطلب رمزك من الأكاديمية.',
+  bad_name: 'اكتب اسمك (حرفان على الأقل).',
+  bad_mosque: 'اختر المسجد أولاً.',
+  registration_closed: 'تسجيل المدربين الجدد متوقف حالياً. تواصل مع الأكاديمية.',
 };
+async function registerTrainer(mosque, name) {
+  if (!CONFIG.APPS_SCRIPT_URL) return { ok: false, error: 'no_server' };
+  let j;
+  try { j = await api({ kind: 'register', mosque, name }); } catch (e) { return { ok: false, error: 'network' }; }
+  if (j.ok) applyLogin(j, j.code);
+  return j;
+}
 async function login(code) {
   if (!CONFIG.APPS_SCRIPT_URL) return { ok: false, error: 'no_server' };
   let j;
@@ -182,7 +193,7 @@ function render() { ({ home: viewHome, form: viewForm, done: viewDone }[ui.view]
 function go(view) { ui.view = view; render(); window.scrollTo(0, 0); }
 function back() { history.state && history.state.v ? history.back() : go('home'); }
 function resetAll() {
-  Object.assign(ui, { view: 'home', section: 'students', onlyPending: false, search: '', form: null, done: null });
+  Object.assign(ui, { reg: null, newCode: null, view: 'home', section: 'students', onlyPending: false, search: '', form: null, done: null });
   go('home');
 }
 function myStudents() {
@@ -215,6 +226,34 @@ function drawStudents(list) {
   $('#sq').addEventListener('input', draw); draw();
 }
 
+/* --- تسجيل مدرب جديد --- */
+function regHTML() {
+  const r = ui.reg;
+  return `<div class="gate" style="text-align:start">
+    <h2>تسجيل مدرب جديد</h2>
+    <p class="sub">اختر مسجدك واكتب اسمك، وسيُنشأ لك رمز من ${CONFIG.CODE_LENGTH} أرقام تلقائياً.</p>
+    <div class="lbl" style="font-weight:700;margin:8px 0">المسجد</div>
+    <div class="chips">${MOSQUES.map((m) => `<button type="button" class="chip ${r.mosque === m.name ? 'on' : ''}" data-act="reg-mosque" data-m="${esc(m.name)}">${esc(m.name)}</button>`).join('')}</div>
+    <div class="lbl" style="font-weight:700;margin:16px 0 8px">اسمك</div>
+    <div class="own" style="margin-top:0"><input id="regname" type="text" maxlength="60" placeholder="الاسم الكامل" autocomplete="off" value="${esc(r.name)}"></div>
+    <div id="gerr" class="gate-err" role="alert" hidden></div>
+    <button id="gbtn" class="btn" data-act="reg-submit">تسجيل وإنشاء الرمز</button>
+    <button class="link newtr" data-act="reg-cancel">رجوع لإدخال الرمز</button></div>`;
+}
+async function doRegister() {
+  const r = ui.reg, err = $('#gerr'), btn = $('#gbtn');
+  r.name = $('#regname').value.replace(/\s+/g, ' ').trim();
+  const show = (m) => { err.textContent = m; err.hidden = false; };
+  err.hidden = true;
+  if (!r.mosque) return show(LOGIN_ERRORS.bad_mosque);
+  if (r.name.length < 2) return show(LOGIN_ERRORS.bad_name);
+  btn.disabled = true; btn.textContent = 'جارٍ التسجيل…';
+  const j = await registerTrainer(r.mosque, r.name);
+  if (j.ok) { ui.newCode = j.code; ui.reg = null; ui.section = 'trainer'; render(); return; }
+  btn.disabled = false; btn.textContent = 'تسجيل وإنشاء الرمز';
+  show(LOGIN_ERRORS[j.error] || 'حدث خطأ. أعد المحاولة.');
+}
+
 /* --- الصفحة الأولى: قسمان، وكلاهما يتطلب رمز المدرب --- */
 const LOCK_SVG = '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>';
 function viewHome(app) {
@@ -227,7 +266,17 @@ function viewHome(app) {
       <p class="sub">أدخل الرمز الخاص بك (${CONFIG.CODE_LENGTH} أرقام) الذي أرسلته لك الأكاديمية.</p>
       <input id="code" class="code-input" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" autocorrect="off" spellcheck="false" maxlength="${CONFIG.CODE_LENGTH}" placeholder="${'•'.repeat(CONFIG.CODE_LENGTH)}" aria-label="رمز الدخول">
       <div id="gerr" class="gate-err" role="alert" hidden></div>
-      <button id="gbtn" class="btn" data-act="login">دخول</button></div>`;
+      <button id="gbtn" class="btn" data-act="login">دخول</button>
+      <button class="link newtr" data-act="reg-open">مدرب جديد ولا تملك رمزاً؟ سجّل هنا</button></div>`;
+    if (ui.reg) body = regHTML();
+  } else if (ui.newCode) {
+    body = `<div class="gate">
+      <div class="lock">${LOCK_SVG}</div>
+      <h2>تم تسجيلك يا ${esc(s.trainer)}</h2>
+      <p class="sub">${esc(s.mosque)}<br>رمزك الخاص للدخول:</p>
+      <div class="code-show" dir="ltr">${esc(ui.newCode)}</div>
+      <p class="sub">احفظ هذا الرمز (صوّر الشاشة أو اكتبه). ستحتاجه كلما دخلت من جهاز آخر.</p>
+      <button class="btn" data-act="code-ok">حفظته، متابعة</button></div>`;
   } else {
     const M = findMosque(s.mosque), mine = store.trainers[s.trainer];
     body = `<div class="card who-card"><div><div class="meta">المدرب</div><div class="who-name">${esc(s.trainer)}</div><div class="meta">${esc(M ? M.name : s.mosque)}</div></div>
@@ -349,6 +398,11 @@ document.addEventListener('click', (e) => {
     case 'student': openForm('student', d.key); break;
     case 'trainer-form': openForm('trainer', null); break;
     case 'login': doLogin(); break;
+    case 'reg-open': ui.reg = { mosque: '', name: '' }; render(); break;
+    case 'reg-cancel': ui.reg = null; render(); break;
+    case 'reg-mosque': ui.reg.name = ($('#regname') || {}).value || ui.reg.name; ui.reg.mosque = d.m; render(); break;
+    case 'reg-submit': doRegister(); break;
+    case 'code-ok': ui.newCode = null; render(); break;
     case 'logout': logout(); break;
     case 'back': back(); break;
     case 'next':
@@ -381,6 +435,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key !== 'Enter' || !e.target.id && !(e.target.dataset && e.target.dataset.own)) return;
   e.preventDefault();
   if (e.target.id === 'code') doLogin();
+  else if (e.target.id === 'regname') doRegister();
   else if (e.target.dataset.own) e.target.closest('.own').querySelector('[data-act="add-own"]').click();
 });
 window.addEventListener('popstate', () => { if (ui.view !== 'home') go('home'); });
